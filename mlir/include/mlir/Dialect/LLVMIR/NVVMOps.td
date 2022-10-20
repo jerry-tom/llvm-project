@@ -37,8 +37,6 @@ def NVVM_Dialect : Dialect {
   }];
 
   let useDefaultAttributePrinterParser = 1;
-
-  let emitAccessorPrefix = kEmitAccessorPrefix_Both;
 }
 
 //===----------------------------------------------------------------------===//
@@ -75,7 +73,7 @@ class NVVM_IntrOp<string mnem, list<Trait> traits,
 //===----------------------------------------------------------------------===//
 
 class NVVM_SpecialRegisterOp<string mnemonic, list<Trait> traits = []> :
-  NVVM_IntrOp<mnemonic, !listconcat(traits, [NoSideEffect]), 1> {
+  NVVM_IntrOp<mnemonic, !listconcat(traits, [Pure]), 1> {
   let arguments = (ins);
   let assemblyFormat = "attr-dict `:` type($res)";
 }
@@ -107,7 +105,7 @@ def NVVM_GridDimZOp : NVVM_SpecialRegisterOp<"read.ptx.sreg.nctaid.z">;
 // NVVM approximate op definitions
 //===----------------------------------------------------------------------===//
 
-def NVVM_RcpApproxFtzF32Op : NVVM_IntrOp<"rcp.approx.ftz.f", [NoSideEffect], 1> {
+def NVVM_RcpApproxFtzF32Op : NVVM_IntrOp<"rcp.approx.ftz.f", [Pure], 1> {
   let arguments = (ins F32:$arg);
   let results = (outs F32:$res);
   let assemblyFormat = "$arg attr-dict `:` type($res)";
@@ -168,6 +166,15 @@ def NVVM_VoteBallotOp :
             llvm::Intrinsic::nvvm_vote_ballot_sync, {$mask, $pred});
   }];
   let hasCustomAssemblyFormat = 1;
+}
+
+def NVVM_SyncWarpOp : 
+  NVVM_Op<"bar.warp.sync">,
+  Arguments<(ins LLVM_Type:$mask)> {
+  string llvmBuilder = [{
+      createIntrinsicCall(builder, llvm::Intrinsic::nvvm_bar_warp_sync, {$mask});
+  }];
+  let assemblyFormat = "$mask attr-dict `:` type($mask)";
 }
 
 
@@ -568,8 +575,8 @@ class MMA_SYNC_INTR {
        # op[1].ptx_elt_type # "\" == eltypeB && " 
        # " \"" # op[2].ptx_elt_type # "\" == eltypeC && "
        # " \"" # op[3].ptx_elt_type # "\" == eltypeD "
-       # " && (sat.hasValue()  ? " # sat # " == static_cast<int>(*sat) : true)"
-       # !if(!ne(b1op, ""), " && (b1Op.hasValue() ? MMAB1Op::" # b1op # " == b1Op.getValue() : true)", "") # ")\n"
+       # " && (sat.has_value()  ? " # sat # " == static_cast<int>(*sat) : true)"
+       # !if(!ne(b1op, ""), " && (b1Op.has_value() ? MMAB1Op::" # b1op # " == b1Op.value() : true)", "") # ")\n"
        # "  return " #
        MMA_SYNC_NAME<layoutA, layoutB, b1op, sat, op[0], op[1], op[2], op[3]>.id # ";", 
           "") // if supported
@@ -995,8 +1002,8 @@ def NVVM_MmaOp : NVVM_Op<"mma.sync", [AttrSizedOperandSegments]> {
         $shape.getM(), $shape.getN(), $shape.getK(), 
         $b1Op, $intOverflowBehavior,
         $layoutA, $layoutB,
-        $multiplicandAPtxType.getValue(), 
-        $multiplicandBPtxType.getValue(),
+        $multiplicandAPtxType.value(), 
+        $multiplicandBPtxType.value(),
         op.accumPtxType(), 
         op.resultPtxType());
 

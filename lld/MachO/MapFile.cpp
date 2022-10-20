@@ -33,6 +33,7 @@
 #include "Symbols.h"
 #include "SyntheticSections.h"
 #include "Target.h"
+#include "lld/Common/ErrorHandler.h"
 #include "llvm/Support/Parallel.h"
 #include "llvm/Support/TimeProfiler.h"
 
@@ -88,10 +89,7 @@ getSymbolStrings(ArrayRef<Defined *> syms) {
           sym->value == piece.inSecOff &&
           "We expect symbols to always point to the start of a StringPiece.");
       StringRef str = isec->getStringRef(&piece - &(*isec->pieces.begin()));
-      assert(str.back() == '\000');
-      (os << "literal string: ")
-          // Remove null sequence at the end
-          .write_escaped(str.substr(0, str.size() - 1));
+      (os << "literal string: ").write_escaped(str);
       break;
     }
     case InputSection::ConcatKind:
@@ -152,16 +150,15 @@ void macho::writeMapFile() {
     }
 
   // Dump table of symbols
-  Symbols liveSymbols, deadSymbols;
-  std::tie(liveSymbols, deadSymbols) = getSymbols();
+  auto [liveSymbols, deadSymbols] = getSymbols();
 
   DenseMap<Symbol *, std::string> liveSymbolStrings =
       getSymbolStrings(liveSymbols);
   os << "# Symbols:\n";
-  os << "# Address\t    File  Name\n";
-  for (Symbol *sym : liveSymbols) {
+  os << "# Address\tSize    \tFile  Name\n";
+  for (Defined *sym : liveSymbols) {
     assert(sym->isLive());
-    os << format("0x%08llX\t[%3u] %s\n", sym->getVA(),
+    os << format("0x%08llX\t0x%08llX\t[%3u] %s\n", sym->getVA(), sym->size,
                  readerToFileOrdinal[sym->getFile()],
                  liveSymbolStrings[sym].c_str());
   }
@@ -170,10 +167,11 @@ void macho::writeMapFile() {
     DenseMap<Symbol *, std::string> deadSymbolStrings =
         getSymbolStrings(deadSymbols);
     os << "# Dead Stripped Symbols:\n";
-    os << "# Address\t    File  Name\n";
-    for (Symbol *sym : deadSymbols) {
+    os << "#        \tSize    \tFile  Name\n";
+    for (Defined *sym : deadSymbols) {
       assert(!sym->isLive());
-      os << format("<<dead>>\t[%3u] %s\n", readerToFileOrdinal[sym->getFile()],
+      os << format("<<dead>>\t0x%08llX\t[%3u] %s\n", sym->size,
+                   readerToFileOrdinal[sym->getFile()],
                    deadSymbolStrings[sym].c_str());
     }
   }

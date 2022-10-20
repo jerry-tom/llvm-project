@@ -10,6 +10,21 @@
 //
 //===----------------------------------------------------------------------===//
 
+def AArch64_smstart : SDNode<"AArch64ISD::SMSTART", SDTypeProfile<0, 3,
+                             [SDTCisInt<0>, SDTCisInt<0>, SDTCisInt<0>]>,
+                             [SDNPHasChain, SDNPSideEffect, SDNPVariadic,
+                              SDNPOptInGlue, SDNPOutGlue]>;
+def AArch64_smstop  : SDNode<"AArch64ISD::SMSTOP", SDTypeProfile<0, 3,
+                             [SDTCisInt<0>, SDTCisInt<0>, SDTCisInt<0>]>,
+                             [SDNPHasChain, SDNPSideEffect, SDNPVariadic,
+                              SDNPOptInGlue, SDNPOutGlue]>;
+def AArch64_restore_za : SDNode<"AArch64ISD::RESTORE_ZA", SDTypeProfile<0, 3,
+                             [SDTCisInt<0>, SDTCisPtrTy<1>]>,
+                             [SDNPHasChain, SDNPSideEffect, SDNPVariadic,
+                              SDNPOptInGlue]>;
+
+def AArch64ObscureCopy : SDNode<"AArch64ISD::OBSCURE_COPY", SDTypeProfile<1, 1, []>, []>;
+
 //===----------------------------------------------------------------------===//
 // Add vector elements horizontally or vertically to ZA tile.
 //===----------------------------------------------------------------------===//
@@ -28,7 +43,7 @@ def ADDVA_MPPZ_S : sme_add_vector_to_tile_u32<0b1, "addva">;
 def : Pat<(AArch64rdsvl (i32 simm6_32b:$imm)), (RDSVLI_XI simm6_32b:$imm)>;
 }
 
-let Predicates = [HasSMEI64] in {
+let Predicates = [HasSMEI16I64] in {
 def ADDHA_MPPZ_D : sme_add_vector_to_tile_u64<0b0, "addha">;
 def ADDVA_MPPZ_D : sme_add_vector_to_tile_u64<0b1, "addva">;
 }
@@ -45,7 +60,7 @@ defm FMOPA_MPPZZ_S : sme_outer_product_fp32<0b0, "fmopa", int_aarch64_sme_mopa>;
 defm FMOPS_MPPZZ_S : sme_outer_product_fp32<0b1, "fmops", int_aarch64_sme_mops>;
 }
 
-let Predicates = [HasSMEF64] in {
+let Predicates = [HasSMEF64F64] in {
 defm FMOPA_MPPZZ_D : sme_outer_product_fp64<0b0, "fmopa", int_aarch64_sme_mopa>;
 defm FMOPS_MPPZZ_D : sme_outer_product_fp64<0b1, "fmops", int_aarch64_sme_mops>;
 }
@@ -64,7 +79,7 @@ defm USMOPA_MPPZZ_S : sme_int_outer_product_i32<0b100, "usmopa", int_aarch64_sme
 defm USMOPS_MPPZZ_S : sme_int_outer_product_i32<0b101, "usmops", int_aarch64_sme_usmops_wide>;
 }
 
-let Predicates = [HasSMEI64] in {
+let Predicates = [HasSMEI16I64] in {
 defm SMOPA_MPPZZ_D  : sme_int_outer_product_i64<0b000, "smopa",  int_aarch64_sme_smopa_wide>;
 defm SMOPS_MPPZZ_D  : sme_int_outer_product_i64<0b001, "smops",  int_aarch64_sme_smops_wide>;
 defm UMOPA_MPPZZ_D  : sme_int_outer_product_i64<0b110, "umopa",  int_aarch64_sme_umopa_wide>;
@@ -117,8 +132,8 @@ defm ZERO_M : sme_zero<"zero">;
 // It's tricky to using the existing pstate operand defined in
 // AArch64SystemOperands.td since it only encodes 5 bits including op1;op2,
 // when these fields are also encoded in CRm[3:1].
-class MSRpstatesvcrImm0_1
-  : PstateWriteSimple<(ins svcr_op:$pstatefield, imm0_1:$imm), "msr",
+def MSRpstatesvcrImm1
+  : PstateWriteSimple<(ins svcr_op:$pstatefield, timm0_1:$imm), "msr",
                       "\t$pstatefield, $imm">,
     Sched<[WriteSys]> {
   bits<3> pstatefield;
@@ -129,7 +144,6 @@ class MSRpstatesvcrImm0_1
   let Inst{7-5} = 0b011; // op2
 }
 
-def MSRpstatesvcrImm1 : MSRpstatesvcrImm0_1;
 def : InstAlias<"smstart",    (MSRpstatesvcrImm1 0b011, 0b1)>;
 def : InstAlias<"smstart sm", (MSRpstatesvcrImm1 0b001, 0b1)>;
 def : InstAlias<"smstart za", (MSRpstatesvcrImm1 0b010, 0b1)>;
@@ -138,11 +152,83 @@ def : InstAlias<"smstop",     (MSRpstatesvcrImm1 0b011, 0b0)>;
 def : InstAlias<"smstop sm",  (MSRpstatesvcrImm1 0b001, 0b0)>;
 def : InstAlias<"smstop za",  (MSRpstatesvcrImm1 0b010, 0b0)>;
 
+
+// Pseudo to match to smstart/smstop. This expands:
+//
+//  pseudonode (pstate_za|pstate_sm), before_call, expected_value
+//
+// Into:
+//
+//   if (before_call != expected_value)
+//     node (pstate_za|pstate_sm)
+//
+// where node can be either 'smstart' or 'smstop'.
+def MSRpstatePseudo :
+  Pseudo<(outs),
+           (ins svcr_op:$pstatefield, timm0_1:$imm, GPR64:$rtpstate, timm0_1:$expected_pstate, variable_ops), []>,
+    Sched<[WriteSys]>;
+
+// Pseudo to conditionally restore ZA state. This expands:
+//
+//   pseudonode tpidr2_el0, tpidr2obj, restore_routine
+//
+// Into:
+//
+//   if (tpidr2_el0 == 0)
+//     BL restore_routine, implicit-use tpidr2obj
+//
+def RestoreZAPseudo :
+  Pseudo<(outs),
+         (ins GPR64:$tpidr2_el0, GPR64sp:$tpidr2obj, i64imm:$restore_routine, variable_ops), []>,
+         Sched<[]>;
+
+def : Pat<(AArch64_restore_za
+            (i64 GPR64:$tpidr2_el0), (i64 GPR64sp:$tpidr2obj), (i64 texternalsym:$restore_routine)),
+          (RestoreZAPseudo GPR64:$tpidr2_el0, GPR64sp:$tpidr2obj, texternalsym:$restore_routine)>;
+
+// Scenario A:
+//
+//   %pstate.before.call = 1
+//   if (%pstate.before.call != 0)
+//     smstop (pstate_za|pstate_sm)
+//   call fn()
+//   if (%pstate.before.call != 0)
+//     smstart (pstate_za|pstate_sm)
+//
+def : Pat<(AArch64_smstop (i32 svcr_op:$pstate), (i64 1), (i64 0)),   // before call
+          (MSRpstatesvcrImm1 svcr_op:$pstate, 0b0)>;
+def : Pat<(AArch64_smstart (i32 svcr_op:$pstate), (i64 1), (i64 0)),  // after call
+          (MSRpstatesvcrImm1 svcr_op:$pstate, 0b1)>;
+
+// Scenario B:
+//
+//   %pstate.before.call = 0
+//   if (%pstate.before.call != 1)
+//     smstart (pstate_za|pstate_sm)
+//   call fn()
+//   if (%pstate.before.call != 1)
+//     smstop (pstate_za|pstate_sm)
+//
+def : Pat<(AArch64_smstart (i32 svcr_op:$pstate), (i64 0), (i64 1)),  // before call
+          (MSRpstatesvcrImm1 svcr_op:$pstate, 0b1)>;
+def : Pat<(AArch64_smstop (i32 svcr_op:$pstate), (i64 0), (i64 1)),   // after call
+          (MSRpstatesvcrImm1 svcr_op:$pstate, 0b0)>;
+
+// The generic case which gets expanded to a pseudo node.
+def : Pat<(AArch64_smstart (i32 svcr_op:$pstate), (i64 GPR64:$rtpstate), (i64 timm0_1:$expected_pstate)),
+          (MSRpstatePseudo svcr_op:$pstate, 0b1, GPR64:$rtpstate, timm0_1:$expected_pstate)>;
+def : Pat<(AArch64_smstop (i32 svcr_op:$pstate), (i64 GPR64:$rtpstate), (i64 timm0_1:$expected_pstate)),
+          (MSRpstatePseudo svcr_op:$pstate, 0b0, GPR64:$rtpstate, timm0_1:$expected_pstate)>;
+
 // Read and write TPIDR2_EL0
 def : Pat<(int_aarch64_sme_set_tpidr2 i64:$val),
           (MSR 0xde85, GPR64:$val)>;
 def : Pat<(i64 (int_aarch64_sme_get_tpidr2)),
           (MRS 0xde85)>;
+
+def OBSCURE_COPY : Pseudo<(outs GPR64:$dst), (ins GPR64:$idx), []>, Sched<[]> { }
+def : Pat<(i64 (AArch64ObscureCopy (i64 GPR64:$idx))),
+          (OBSCURE_COPY GPR64:$idx)>;
 
 //===----------------------------------------------------------------------===//
 // SVE2 instructions
@@ -156,3 +242,37 @@ defm UCLAMP_ZZZ : sve2_clamp<"uclamp", 0b1, int_aarch64_sve_uclamp>;
 defm PSEL_PPPRI : sve2_int_perm_sel_p<"psel", int_aarch64_sve_psel>;
 
 } // End let Predicates = [HasSME]
+
+//===----------------------------------------------------------------------===//
+// SME2 Instructions
+//===----------------------------------------------------------------------===//
+let Predicates = [HasSME2] in {
+defm ADD_VG2_M2ZZ_S : sme2_mla_add_sub_array_vg2_single_S<"add", 0b10>;
+defm ADD_VG4_M4ZZ_S : sme2_mla_add_sub_array_vg4_single_S<"add", 0b10>;
+
+defm SUB_VG2_M2ZZ_S : sme2_mla_add_sub_array_vg2_single_S<"sub", 0b11>;
+defm SUB_VG4_M4ZZ_S : sme2_mla_add_sub_array_vg4_single_S<"sub", 0b11>;
+
+defm FMLA_VG2_M2ZZ_S : sme2_mla_add_sub_array_vg2_single_S<"fmla", 0b00>;
+defm FMLA_VG4_M4ZZ_S : sme2_mla_add_sub_array_vg4_single_S<"fmla", 0b00>;
+
+defm FMLS_VG2_M2ZZ_S : sme2_mla_add_sub_array_vg2_single_S<"fmls", 0b01>;
+defm FMLS_VG4_M4ZZ_S : sme2_mla_add_sub_array_vg4_single_S<"fmls", 0b01>;
+}
+
+
+let Predicates = [HasSME2, HasSMEI16I64] in {
+defm ADD_VG2_M2ZZ_D : sme2_mla_add_sub_array_vg2_single_D<"add", 0b10>;
+defm ADD_VG4_M4ZZ_D : sme2_mla_add_sub_array_vg4_single_D<"add", 0b10>;
+
+defm SUB_VG2_M2ZZ_D : sme2_mla_add_sub_array_vg2_single_D<"sub", 0b11>;
+defm SUB_VG4_M4ZZ_D : sme2_mla_add_sub_array_vg4_single_D<"sub", 0b11>;
+}
+
+let Predicates = [HasSME2, HasSMEF64F64] in {
+defm FMLA_VG2_M2ZZ_D : sme2_mla_add_sub_array_vg2_single_D<"fmla", 0b00>;
+defm FMLA_VG4_M4ZZ_D : sme2_mla_add_sub_array_vg4_single_D<"fmla", 0b00>;
+
+defm FMLS_VG2_M2ZZ_D : sme2_mla_add_sub_array_vg2_single_D<"fmls", 0b01>;
+defm FMLS_VG4_M4ZZ_D : sme2_mla_add_sub_array_vg4_single_D<"fmls", 0b01>;
+}

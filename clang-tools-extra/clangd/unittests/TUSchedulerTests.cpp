@@ -264,7 +264,7 @@ TEST_F(TUSchedulerTests, Debounce) {
   Notification N;
   updateWithDiags(S, Path, "auto (timed out)", WantDiagnostics::Auto,
                   [&](std::vector<Diag>) { N.notify(); });
-  EXPECT_TRUE(N.wait(timeoutSeconds(1)));
+  EXPECT_TRUE(N.wait(timeoutSeconds(5)));
 
   // Once we start shutting down the TUScheduler, this one becomes a dead write.
   updateWithDiags(S, Path, "auto (discarded)", WantDiagnostics::Auto,
@@ -1035,7 +1035,7 @@ TEST_F(TUSchedulerTests, TUStatus) {
                   // Starts handling the update action and blocks until the
                   // first preamble is built.
                   ASTAction::RunningAction,
-                  // Afterwqards it builds an AST for that preamble to publish
+                  // Afterwards it builds an AST for that preamble to publish
                   // diagnostics.
                   ASTAction::Building,
                   // Then goes idle.
@@ -1227,12 +1227,15 @@ TEST_F(TUSchedulerTests, IncluderCache) {
   auto GetFlags = [&](PathRef Header) {
     S.update(Header, getInputs(Header, ";"), WantDiagnostics::Yes);
     EXPECT_TRUE(S.blockUntilIdle(timeoutSeconds(10)));
+    Notification CmdDone;
     tooling::CompileCommand Cmd;
     S.runWithPreamble("GetFlags", Header, TUScheduler::StaleOrAbsent,
                       [&](llvm::Expected<InputsAndPreamble> Inputs) {
                         ASSERT_FALSE(!Inputs) << Inputs.takeError();
                         Cmd = std::move(Inputs->Command);
+                        CmdDone.notify();
                       });
+    CmdDone.wait();
     EXPECT_TRUE(S.blockUntilIdle(timeoutSeconds(10)));
     return Cmd.CommandLine;
   };
@@ -1401,18 +1404,21 @@ TEST_F(TUSchedulerTests, PreambleThrottle) {
       }
       if (Invoke)
         Invoke();
-      if (Notify && ID == Notify->first) {
-        Notify->second->notify();
-        Notify.reset();
+      {
+        std::lock_guard<std::mutex> Lock(Mu);
+        if (Notify && ID == Notify->first) {
+          Notify->second->notify();
+          Notify.reset();
+        }
       }
       return ID;
     }
 
     void release(RequestID ID) override {
-      Releases.push_back(ID);
       Callback SatisfyNext;
       {
         std::lock_guard<std::mutex> Lock(Mu);
+        Releases.push_back(ID);
         if (ID > 0 && Acquires.size() == NumRequests)
           SatisfyNext = std::move(Callbacks[ID - 1]);
       }
@@ -1497,6 +1503,9 @@ TEST_F(TUSchedulerTests, PreambleThrottle) {
     // We haven't released anything yet, we're still waiting.
     EXPECT_THAT(Throttler.Releases, testing::IsEmpty());
 
+    // FIXME: This is flaky, becaues the request can be destroyed after shutdown
+    // if it hasn't been dequeued yet (stop() resets NextRequest).
+#if 0
     // Now close file A, which will shut down its AST worker.
     S.remove(A);
     // Request is destroyed after the queue shutdown, so release() has happened.
@@ -1505,6 +1514,7 @@ TEST_F(TUSchedulerTests, PreambleThrottle) {
     EXPECT_THAT(BuiltFilenames, testing::IsEmpty());
     // But we've cancelled the request to build A (not sure which its ID is).
     EXPECT_THAT(Throttler.Releases, ElementsAre(AnyOf(1, 0)));
+#endif
 
     // Now shut down the TU Scheduler.
   }

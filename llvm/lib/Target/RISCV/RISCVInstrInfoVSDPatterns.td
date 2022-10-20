@@ -362,8 +362,9 @@ multiclass VPatWidenBinarySDNode_WV_WX<SDNode op, PatFrags extop,
     defvar wti = vtiToWti.Wti;
     def : Pat<(op (wti.Vector wti.RegClass:$rs2),
                   (wti.Vector (extop (vti.Vector vti.RegClass:$rs1)))),
-              (!cast<Instruction>(instruction_name#"_WV_"#vti.LMul.MX)
-                 wti.RegClass:$rs2, vti.RegClass:$rs1, vti.AVL, vti.Log2SEW)>;
+              (!cast<Instruction>(instruction_name#"_WV_"#vti.LMul.MX#"_TIED")
+                 wti.RegClass:$rs2, vti.RegClass:$rs1, vti.AVL, vti.Log2SEW,
+                 TAIL_AGNOSTIC)>;
     def : Pat<(op (wti.Vector wti.RegClass:$rs2),
                   (wti.Vector (extop (vti.Vector (SplatPat GPR:$rs1))))),
               (!cast<Instruction>(instruction_name#"_WX_"#vti.LMul.MX)
@@ -443,8 +444,9 @@ multiclass VPatWidenBinaryFPSDNode_WV_WF<SDNode op, string instruction_name> {
                   (wti.Vector (riscv_fpextend_vl_oneuse
                                    (vti.Vector vti.RegClass:$rs1),
                                    (vti.Mask true_mask), (XLenVT srcvalue)))),
-              (!cast<Instruction>(instruction_name#"_WV_"#vti.LMul.MX)
-                 wti.RegClass:$rs2, vti.RegClass:$rs1, vti.AVL, vti.Log2SEW)>;
+              (!cast<Instruction>(instruction_name#"_WV_"#vti.LMul.MX#"_TIED")
+                 wti.RegClass:$rs2, vti.RegClass:$rs1, vti.AVL, vti.Log2SEW,
+                 TAIL_AGNOSTIC)>;
     def : Pat<(op (wti.Vector wti.RegClass:$rs2),
                   (wti.Vector (riscv_fpextend_vl_oneuse
                                    (vti.Vector (SplatFPOp vti.ScalarRegClass:$rs1)),
@@ -1039,7 +1041,7 @@ foreach vti = AllFloatVectors in {
   // Fold store of vmv.f.s to a vse with VL=1.
   defvar store_instr = !cast<Instruction>("PseudoVSE"#vti.SEW#"_V_"#vti.LMul.MX);
 
-  let AddedComplexity = 1 in {
+  let AddedComplexity = 2 in {
   // Add complexity to increase the priority of this pattern being matched.
   def : Pat<(store (vti.Scalar (int_riscv_vfmv_f_s (vti.Vector vti.RegClass:$rs2))), GPR:$rs1),
             (store_instr vti.RegClass:$rs2, GPR:$rs1, 1, vti.Log2SEW)>;

@@ -23,6 +23,8 @@ add_flang_unittest(FlangOptimizerTests
   Builder/Runtime/StopTest.cpp
   Builder/Runtime/TransformationalTest.cpp
   FIRContextTest.cpp
+  FIRTypesTest.cpp
+  FortranVariableTest.cpp
   InternalNamesTest.cpp
   KindMappingTest.cpp
   RTBuilder.cpp

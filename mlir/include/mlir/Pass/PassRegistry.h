@@ -140,7 +140,8 @@ void registerPass(const PassAllocatorFunction &function);
 ///   /// At namespace scope.
 ///   static PassRegistration<MyPass> reg;
 ///
-template <typename ConcretePass> struct PassRegistration {
+template <typename ConcretePass>
+struct PassRegistration {
   PassRegistration(const PassAllocatorFunction &constructor) {
     registerPass(constructor);
   }
@@ -184,7 +185,8 @@ struct PassPipelineRegistration {
 
 /// Convenience specialization of PassPipelineRegistration for EmptyPassOptions
 /// that does not pass an empty options struct to the pass builder function.
-template <> struct PassPipelineRegistration<EmptyPipelineOptions> {
+template <>
+struct PassPipelineRegistration<EmptyPipelineOptions> {
   PassPipelineRegistration(
       StringRef arg, StringRef description,
       const std::function<void(OpPassManager &)> &builder) {
@@ -278,13 +280,19 @@ private:
 // Pass Reproducer
 //===----------------------------------------------------------------------===//
 
-/// Attach an assembly resource parser that handles MLIR reproducer
-/// configurations. Any found reproducer information will be attached to the
-/// given pass manager, e.g. the reproducer pipeline, verification flags, etc.
-// FIXME: Remove the `enableThreading` flag when possible. Some tools, e.g.
-//        mlir-opt, force disable threading during parsing.
-void attachPassReproducerAsmResource(ParserConfig &config, PassManager &pm,
-                                     bool &enableThreading);
+struct PassReproducerOptions {
+  /// Attach an assembly resource parser to 'config' that collects the MLIR
+  /// reproducer configuration into this instance.
+  void attachResourceParser(ParserConfig &config);
+
+  /// Apply the reproducer options to 'pm' and its context.
+  LogicalResult apply(PassManager &pm) const;
+
+private:
+  Optional<std::string> pipeline;
+  Optional<bool> verifyEach;
+  Optional<bool> disableThreading;
+};
 
 } // namespace mlir
 

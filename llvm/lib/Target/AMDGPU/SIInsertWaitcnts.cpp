@@ -434,6 +434,17 @@ public:
 #endif // NDEBUG
   }
 
+  // Return the appropriate VMEM_*_ACCESS type for Inst, which must be a VMEM or
+  // FLAT instruction.
+  WaitEventType getVmemWaitEventType(const MachineInstr &Inst) const {
+    assert(SIInstrInfo::isVMEM(Inst) || SIInstrInfo::isFLAT(Inst));
+    if (!ST->hasVscnt())
+      return VMEM_ACCESS;
+    if (Inst.mayStore() && !SIInstrInfo::isAtomicRet(Inst))
+      return VMEM_WRITE_ACCESS;
+    return VMEM_READ_ACCESS;
+  }
+
   bool mayAccessVMEMThroughFlat(const MachineInstr &MI) const;
   bool mayAccessLDSThroughFlat(const MachineInstr &MI) const;
   bool generateWaitcntInstBefore(MachineInstr &MI,
@@ -1181,12 +1192,12 @@ bool SIInsertWaitcnts::generateWaitcntInstBefore(MachineInstr &MI,
     }
   }
 
-  // Check to see if this is an S_BARRIER, and if an implicit S_WAITCNT 0
-  // occurs before the instruction. Doing it here prevents any additional
-  // S_WAITCNTs from being emitted if the instruction was marked as
-  // requiring a WAITCNT beforehand.
+  // The subtarget may have an implicit S_WAITCNT 0 before barriers. If it does
+  // not, we need to ensure the subtarget is capable of backing off barrier
+  // instructions in case there are any outstanding memory operations that may
+  // cause an exception. Otherwise, insert an explicit S_WAITCNT 0 here.
   if (MI.getOpcode() == AMDGPU::S_BARRIER &&
-      !ST->hasAutoWaitcntBeforeBarrier()) {
+      !ST->hasAutoWaitcntBeforeBarrier() && !ST->supportsBackOffBarrier()) {
     Wait = Wait.combined(AMDGPU::Waitcnt::allZero(ST->hasVscnt()));
   }
 
@@ -1384,12 +1395,8 @@ void SIInsertWaitcnts::updateEventWaitcntAfter(MachineInstr &Inst,
 
     if (mayAccessVMEMThroughFlat(Inst)) {
       ++FlatASCount;
-      if (!ST->hasVscnt())
-        ScoreBrackets->updateByEvent(TII, TRI, MRI, VMEM_ACCESS, Inst);
-      else if (Inst.mayLoad() && !SIInstrInfo::isAtomicNoRet(Inst))
-        ScoreBrackets->updateByEvent(TII, TRI, MRI, VMEM_READ_ACCESS, Inst);
-      else
-        ScoreBrackets->updateByEvent(TII, TRI, MRI, VMEM_WRITE_ACCESS, Inst);
+      ScoreBrackets->updateByEvent(TII, TRI, MRI, getVmemWaitEventType(Inst),
+                                   Inst);
     }
 
     if (mayAccessLDSThroughFlat(Inst)) {
@@ -1407,14 +1414,8 @@ void SIInsertWaitcnts::updateEventWaitcntAfter(MachineInstr &Inst,
       ScoreBrackets->setPendingFlat();
   } else if (SIInstrInfo::isVMEM(Inst) &&
              !llvm::AMDGPU::getMUBUFIsBufferInv(Inst.getOpcode())) {
-    if (!ST->hasVscnt())
-      ScoreBrackets->updateByEvent(TII, TRI, MRI, VMEM_ACCESS, Inst);
-    else if ((Inst.mayLoad() && !SIInstrInfo::isAtomicNoRet(Inst)) ||
-             /* IMAGE_GET_RESINFO / IMAGE_GET_LOD */
-             (TII->isMIMG(Inst) && !Inst.mayLoad() && !Inst.mayStore()))
-      ScoreBrackets->updateByEvent(TII, TRI, MRI, VMEM_READ_ACCESS, Inst);
-    else if (Inst.mayStore())
-      ScoreBrackets->updateByEvent(TII, TRI, MRI, VMEM_WRITE_ACCESS, Inst);
+    ScoreBrackets->updateByEvent(TII, TRI, MRI, getVmemWaitEventType(Inst),
+                                 Inst);
 
     if (ST->vmemWriteNeedsExpWaitcnt() &&
         (Inst.mayStore() || SIInstrInfo::isAtomicRet(Inst))) {
@@ -1737,7 +1738,7 @@ bool SIInsertWaitcnts::shouldFlushVmCnt(MachineLoop *ML,
             VgprUse.insert(RegNo);
             // If at least one of Op's registers is in the score brackets, the
             // value is likely loaded outside of the loop.
-            if (Brackets.getRegScore(RegNo, VM_CNT) > 0) {
+            if (Brackets.getRegScore(RegNo, VM_CNT) > Brackets.getScoreLB(VM_CNT)) {
               UsesVgprLoadedOutside = true;
               break;
             }

@@ -34,9 +34,7 @@ namespace objcarc {
 /// TODO: This class could be generalized to know about other ObjC-specific
 /// tricks. Such as knowing that ivars in the non-fragile ABI are non-aliasing
 /// even though their offsets are dynamic.
-class ObjCARCAAResult : public AAResultBase<ObjCARCAAResult> {
-  friend AAResultBase<ObjCARCAAResult>;
-
+class ObjCARCAAResult : public AAResultBase {
   const DataLayout &DL;
 
 public:
@@ -57,8 +55,8 @@ public:
   bool pointsToConstantMemory(const MemoryLocation &Loc, AAQueryInfo &AAQI,
                               bool OrLocal);
 
-  using AAResultBase::getModRefBehavior;
-  FunctionModRefBehavior getModRefBehavior(const Function *F);
+  using AAResultBase::getMemoryEffects;
+  MemoryEffects getMemoryEffects(const Function *F);
 
   using AAResultBase::getModRefInfo;
   ModRefInfo getModRefInfo(const CallBase *Call, const MemoryLocation &Loc,

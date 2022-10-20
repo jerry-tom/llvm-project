@@ -14,9 +14,10 @@
 
 #include "Delta.h"
 #include "ReducerWorkItem.h"
+#include "Utils.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/Analysis/ModuleSummaryAnalysis.h"
+#include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -118,7 +119,8 @@ static int getLines(StringRef Filepath) {
 /// Splits Chunks in half and prints them.
 /// If unable to split (when chunk size is 1) returns false.
 static bool increaseGranularity(std::vector<Chunk> &Chunks) {
-  errs() << "Increasing granularity...";
+  if (Verbose)
+    errs() << "Increasing granularity...";
   std::vector<Chunk> NewChunks;
   bool SplitOne = false;
 
@@ -134,11 +136,13 @@ static bool increaseGranularity(std::vector<Chunk> &Chunks) {
   }
   if (SplitOne) {
     Chunks = NewChunks;
-    errs() << "Success! New Chunks:\n";
-    for (auto C : Chunks) {
-      errs() << '\t';
-      C.print();
-      errs() << '\n';
+    if (Verbose) {
+      errs() << "Success! New Chunks:\n";
+      for (auto C : Chunks) {
+        errs() << '\t';
+        C.print();
+        errs() << '\n';
+      }
     }
   }
   return SplitOne;
@@ -173,23 +177,30 @@ CheckChunk(Chunk &ChunkToCheckForUninterestingness,
   // Some reductions may result in invalid IR. Skip such reductions.
   if (verifyReducerWorkItem(*Clone, &errs())) {
     if (AbortOnInvalidReduction) {
-      errs() << "Invalid reduction\n";
+      errs() << "Invalid reduction, aborting.\n";
+      Clone->print(errs());
       exit(1);
     }
-    errs() << " **** WARNING | reduction resulted in invalid module, "
-              "skipping\n";
+    if (Verbose) {
+      errs() << " **** WARNING | reduction resulted in invalid module, "
+                "skipping\n";
+    }
     return nullptr;
   }
 
-  errs() << "Ignoring: ";
-  ChunkToCheckForUninterestingness.print();
-  for (const Chunk &C : UninterestingChunks)
-    C.print();
+  if (Verbose) {
+    errs() << "Ignoring: ";
+    ChunkToCheckForUninterestingness.print();
+    for (const Chunk &C : UninterestingChunks)
+      C.print();
+    errs() << "\n";
+  }
 
   SmallString<128> CurrentFilepath;
   if (!isReduced(*Clone, Test, CurrentFilepath)) {
     // Program became non-reduced, so this chunk appears to be interesting.
-    errs() << "\n";
+    if (Verbose)
+      errs() << "\n";
     return nullptr;
   }
   return Clone;
@@ -224,10 +235,11 @@ SmallString<0> ProcessChunkFromSerializedBitcode(
 /// reduces the amount of chunks that are considered interesting by the
 /// given test. The number of chunks is determined by a preliminary run of the
 /// reduction pass where no change must be made to the module.
-void llvm::runDeltaPass(TestRunner &Test,
-                        ReductionFunc ExtractChunksFromModule) {
+void llvm::runDeltaPass(TestRunner &Test, ReductionFunc ExtractChunksFromModule,
+                        StringRef Message) {
   assert(!verifyReducerWorkItem(Test.getProgram(), &errs()) &&
          "input module is broken before making changes");
+  errs() << "*** " << Message << "...\n";
 
   SmallString<128> CurrentFilepath;
   if (!isReduced(Test.getProgram(), Test, CurrentFilepath)) {
@@ -252,7 +264,7 @@ void llvm::runDeltaPass(TestRunner &Test,
 
 #ifndef NDEBUG
     // Make sure that the number of chunks does not change as we reduce.
-    std::vector<Chunk> NoChunks;
+    std::vector<Chunk> NoChunks = {{0, INT_MAX}};
     Oracle NoChunksCounter(NoChunks);
     std::unique_ptr<ReducerWorkItem> Clone =
         cloneReducerWorkItem(Test.getProgram(), Test.getTargetMachine());
@@ -262,7 +274,9 @@ void llvm::runDeltaPass(TestRunner &Test,
 #endif
   }
   if (!Targets) {
-    errs() << "\nNothing to reduce\n";
+    if (Verbose)
+      errs() << "\nNothing to reduce\n";
+    errs() << "----------------------------\n";
     return;
   }
 
@@ -381,7 +395,9 @@ void llvm::runDeltaPass(TestRunner &Test,
       FoundAtLeastOneNewUninterestingChunkWithCurrentGranularity = true;
       UninterestingChunks.insert(ChunkToCheckForUninterestingness);
       ReducedProgram = std::move(Result);
-      errs() << " **** SUCCESS | lines: " << getLines(CurrentFilepath) << "\n";
+      if (Verbose)
+        errs() << " **** SUCCESS | lines: " << getLines(CurrentFilepath)
+               << "\n";
       writeOutput(*ReducedProgram, "Saved new best reduction to ");
     }
     // Delete uninteresting chunks
@@ -396,5 +412,7 @@ void llvm::runDeltaPass(TestRunner &Test,
   // If we reduced the testcase replace it
   if (ReducedProgram)
     Test.setProgram(std::move(ReducedProgram));
-  errs() << "Couldn't increase anymore.\n";
+  if (Verbose)
+    errs() << "Couldn't increase anymore.\n";
+  errs() << "----------------------------\n";
 }

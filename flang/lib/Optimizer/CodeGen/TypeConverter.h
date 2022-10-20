@@ -65,6 +65,8 @@ public:
       return llvm::None;
     });
     addConversion(
+        [&](fir::ClassType classTy) { return convertBoxType(classTy); });
+    addConversion(
         [&](fir::CharacterType charTy) { return convertCharType(charTy); });
     addConversion(
         [&](fir::ComplexType cmplx) { return convertComplexType(cmplx); });
@@ -199,7 +201,7 @@ public:
 
   // This corresponds to the descriptor as defined in ISO_Fortran_binding.h and
   // the addendum defined in descriptor.h.
-  mlir::Type convertBoxType(BoxType box, int rank = unknownRank()) {
+  mlir::Type convertBoxType(BaseBoxType box, int rank = unknownRank()) {
     // (base_addr*, elem_len, version, rank, type, attribute, f18Addendum, [dim]
     llvm::SmallVector<mlir::Type> dataDescFields;
     mlir::Type ele = box.getEleTy();
@@ -316,9 +318,9 @@ public:
     // degenerate the array and do not want a the type to become `T**` but
     // merely `T*`.
     if (auto seqTy = eleTy.dyn_cast<fir::SequenceType>()) {
-      if (!seqTy.hasConstantShape() ||
+      if (seqTy.hasDynamicExtents() ||
           characterWithDynamicLen(seqTy.getEleTy())) {
-        if (seqTy.hasConstantInterior())
+        if (seqTy.getConstantRows() > 0)
           return convertType(seqTy);
         eleTy = seqTy.getEleTy();
       }
@@ -356,7 +358,7 @@ public:
         if (--i == 0)
           break;
       }
-      if (seq.hasConstantShape())
+      if (!seq.hasDynamicExtents())
         return baseTy;
     }
     return mlir::LLVM::LLVMPointerType::get(baseTy);

@@ -125,9 +125,11 @@ static cl::opt<std::string> QualifierAlignment(
              "determined by the QualifierAlignment style flag"),
     cl::init(""), cl::cat(ClangFormatCategory));
 
-static cl::opt<std::string>
-    Files("files", cl::desc("Provide a list of files to run clang-format"),
-          cl::init(""), cl::cat(ClangFormatCategory));
+static cl::opt<std::string> Files(
+    "files",
+    cl::desc("A file containing a list of files to process, one per line."),
+    cl::value_desc("filename"),
+    cl::init(""), cl::cat(ClangFormatCategory));
 
 static cl::opt<bool>
     Verbose("verbose", cl::desc("If set, shows the list of processed files"),
@@ -246,8 +248,12 @@ static bool fillRanges(MemoryBuffer *Code,
         errs() << "error: invalid <start line>:<end line> pair\n";
         return true;
       }
+      if (FromLine < 1) {
+        errs() << "error: start line should be at least 1\n";
+        return true;
+      }
       if (FromLine > ToLine) {
-        errs() << "error: start line should be less than end line\n";
+        errs() << "error: start line should not exceed end line\n";
         return true;
       }
       SourceLocation Start = Sources.translateLineCol(ID, FromLine, 1);

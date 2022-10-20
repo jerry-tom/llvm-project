@@ -11,6 +11,7 @@ set(LLVM_LINK_COMPONENTS
   IRReader
   MC
   MIRParser
+  Passes
   Support
   Target
   TransformUtils
@@ -27,6 +28,7 @@ add_llvm_tool(llvm-reduce
   deltas/ReduceArguments.cpp
   deltas/ReduceAttributes.cpp
   deltas/ReduceBasicBlocks.cpp
+  deltas/ReduceDIMetadata.cpp
   deltas/ReduceFunctionBodies.cpp
   deltas/ReduceFunctions.cpp
   deltas/ReduceGlobalObjects.cpp
@@ -37,6 +39,7 @@ add_llvm_tool(llvm-reduce
   deltas/ReduceMetadata.cpp
   deltas/ReduceModuleData.cpp
   deltas/ReduceOperandBundles.cpp
+  deltas/ReduceOpcodes.cpp
   deltas/ReduceSpecialGlobals.cpp
   deltas/ReduceOperands.cpp
   deltas/ReduceOperandsSkip.cpp
@@ -45,7 +48,11 @@ add_llvm_tool(llvm-reduce
   deltas/ReduceInstructionFlagsMIR.cpp
   deltas/ReduceIRReferences.cpp
   deltas/ReduceVirtualRegisters.cpp
+  deltas/ReduceRegisterMasks.cpp
+  deltas/ReduceRegisterDefs.cpp
   deltas/ReduceRegisterUses.cpp
+  deltas/ReduceUsingSimplifyCFG.cpp
+  deltas/RunIRPasses.cpp
   deltas/SimplifyInstructions.cpp
   llvm-reduce.cpp
 
